@@ -100,7 +100,7 @@ definitions:
         type: SimpleRetriever
         requester:
           $ref: "#/definitions/base_requester"
-          path: v2/teams
+          path: v2/team
           http_method: GET
           request_headers:
             DD-APPLICATION-KEY: "{{ config['application_key'] }}"
@@ -112,11 +112,14 @@ definitions:
               - data
         paginator:
           type: DefaultPaginator
+          page_token_option:
+            type: RequestPath
           pagination_strategy:
             type: CursorPagination
-            cursor_value: >-
-              {{ last_record['meta']['pagination']['next_offset'] if last_record
-              else None }}
+            cursor_value: "{{ response.get(\"links\", {}).get(\"next\", {}) }}"
+            stop_condition: "{{ not response.get(\"links\", {}).get(\"next\", {}) }}"
+        decoder:
+          type: JsonDecoder
       schema_loader:
         type: InlineSchemaLoader
         schema:
@@ -366,6 +369,178 @@ definitions:
         type: InlineSchemaLoader
         schema:
           $ref: "#/schemas/users"
+    ci_visibility_tests:
+      type: DeclarativeStream
+      name: ci_visibility_tests
+      primary_key:
+        - id
+      retriever:
+        type: SimpleRetriever
+        requester:
+          $ref: "#/definitions/base_requester"
+          path: v2/ci/tests/events
+          http_method: GET
+          request_parameters:
+            sort: timestamp
+            filter[query]: "{{ config['query'] }}"
+          request_headers:
+            DD-APPLICATION-KEY: "{{ config['application_key'] }}"
+          error_handler:
+            type: CompositeErrorHandler
+            error_handlers:
+              - type: DefaultErrorHandler
+                response_filters:
+                  - type: HttpResponseFilter
+                    action: RETRY
+                    http_codes:
+                      - 429
+                    error_message: Too many requests, retrying...
+                backoff_strategies:
+                  - type: WaitTimeFromHeader
+                    header: x-ratelimit-reset
+        record_selector:
+          type: RecordSelector
+          extractor:
+            type: DpathExtractor
+            field_path:
+              - data
+        paginator:
+          type: DefaultPaginator
+          page_token_option:
+            type: RequestPath
+          page_size_option:
+            type: RequestOption
+            field_name: page[limit]
+            inject_into: request_parameter
+          pagination_strategy:
+            type: CursorPagination
+            page_size: 1000
+            cursor_value: "{{ response.get(\"links\", {}).get(\"next\", {}) }}"
+            stop_condition: "{{ not response.get(\"links\", {}).get(\"next\", {}) }}"
+        decoder:
+          type: JsonDecoder
+      incremental_sync:
+        type: DatetimeBasedCursor
+        cursor_field: sync_date
+        cursor_datetime_formats:
+          - "%Y-%m-%dT%H:%M:%S.%fZ"
+          - "%Y-%m-%dT%H:%M:%SZ"
+        datetime_format: "%Y-%m-%dT%H:%M:%SZ"
+        start_datetime:
+          type: MinMaxDatetime
+          datetime: >-
+            {{ config['start_date'] or day_delta(-30,
+            format='%Y-%m-%dT%H:%M:%SZ') }}
+          datetime_format: "%Y-%m-%dT%H:%M:%SZ"
+        start_time_option:
+          type: RequestOption
+          field_name: filter[from]
+          inject_into: request_parameter
+        end_time_option:
+          type: RequestOption
+          field_name: filter[to]
+          inject_into: request_parameter
+        end_datetime:
+          type: MinMaxDatetime
+          datetime: "{{ now_utc().strftime('%Y-%m-%dT%H:%M:%SZ') }}"
+          datetime_format: "%Y-%m-%dT%H:%M:%SZ"
+      transformations:
+        - type: AddFields
+          fields:
+            - type: AddedFieldDefinition
+              path:
+                - sync_date
+              value: "{{ record['attributes']['timestamp'] }}"
+      schema_loader:
+        type: InlineSchemaLoader
+        schema:
+          $ref: "#/schemas/ci_visibility_tests"
+      ci_visibility_pipelines:
+        type: DeclarativeStream
+        name: ci_visibility_pipelines
+        primary_key:
+          - id
+        retriever:
+          type: SimpleRetriever
+          requester:
+            $ref: "#/definitions/base_requester"
+            path: v2/ci/pipelines/events
+            http_method: GET
+            request_parameters:
+              sort: timestamp
+              filter[query]: "{{ config['query'] }}"
+            request_headers:
+              DD-APPLICATION-KEY: "{{ config['application_key'] }}"
+            error_handler:
+              type: CompositeErrorHandler
+              error_handlers:
+                - type: DefaultErrorHandler
+                  response_filters:
+                    - type: HttpResponseFilter
+                      action: RETRY
+                      http_codes:
+                        - 429
+                      error_message: Too many requests, retrying...
+                  backoff_strategies:
+                    - type: WaitTimeFromHeader
+                      header: x-ratelimit-reset
+          record_selector:
+            type: RecordSelector
+            extractor:
+              type: DpathExtractor
+              field_path:
+                - data
+          paginator:
+            type: DefaultPaginator
+            page_token_option:
+              type: RequestPath
+            page_size_option:
+              type: RequestOption
+              field_name: page[limit]
+              inject_into: request_parameter
+            pagination_strategy:
+              type: CursorPagination
+              page_size: 1000
+              cursor_value: "{{ response.get(\"links\", {}).get(\"next\", {}) }}"
+              stop_condition: "{{ not response.get(\"links\", {}).get(\"next\", {}) }}"
+          decoder:
+            type: JsonDecoder
+        incremental_sync:
+          type: DatetimeBasedCursor
+          cursor_field: sync_date
+          cursor_datetime_formats:
+            - "%Y-%m-%dT%H:%M:%S.%fZ"
+            - "%Y-%m-%dT%H:%M:%SZ"
+          datetime_format: "%Y-%m-%dT%H:%M:%SZ"
+          start_datetime:
+            type: MinMaxDatetime
+            datetime: >-
+              {{ config['start_date'] or day_delta(-30,
+              format='%Y-%m-%dT%H:%M:%SZ') }}
+            datetime_format: "%Y-%m-%dT%H:%M:%SZ"
+          start_time_option:
+            type: RequestOption
+            field_name: filter[from]
+            inject_into: request_parameter
+          end_time_option:
+            type: RequestOption
+            field_name: filter[to]
+            inject_into: request_parameter
+          end_datetime:
+            type: MinMaxDatetime
+            datetime: "{{ now_utc().strftime('%Y-%m-%dT%H:%M:%SZ') }}"
+            datetime_format: "%Y-%m-%dT%H:%M:%SZ"
+        transformations:
+          - type: AddFields
+            fields:
+              - type: AddedFieldDefinition
+                path:
+                  - sync_date
+                value: "{{ record['attributes']['timestamp'] }}"
+        schema_loader:
+          type: InlineSchemaLoader
+          schema:
+            $ref: "#/schemas/ci_visibility_pipelines"
   base_requester:
     type: HttpRequester
     url_base: https://api.{{ config['site'] }}/api/
@@ -389,6 +564,8 @@ streams:
   - $ref: "#/definitions/streams/service_level_objectives"
   - $ref: "#/definitions/streams/synthetic_tests"
   - $ref: "#/definitions/streams/users"
+  - $ref: "#/definitions/streams/ci_visibility_tests"
+  - $ref: "#/definitions/streams/ci_visibility_pipelines"
 
 spec:
   type: Spec
@@ -510,6 +687,8 @@ metadata:
     service_level_objectives: false
     synthetic_tests: false
     users: false
+    ci_visibility_tests: false
+    ci_visibility_pipelines: false
   testedStreams:
     audit_logs:
       hasRecords: true
@@ -534,7 +713,7 @@ metadata:
       responsesAreSuccessful: true
     incident_teams:
       hasRecords: true
-      streamHash: 0d8bc56787c599e1011cfab5b7c0e84b2c851557
+      streamHash: d817a91cf1df2c7ca53131f8d6c8a67285d84aec
       hasResponse: true
       primaryKeysAreUnique: true
       primaryKeysArePresent: true
@@ -584,6 +763,20 @@ metadata:
     users:
       hasRecords: true
       streamHash: b5f9f6ef4f26ab4ba4a9485496e18506c4fb3184
+      hasResponse: true
+      primaryKeysAreUnique: true
+      primaryKeysArePresent: true
+      responsesAreSuccessful: true
+    ci_visibility_tests:
+      hasRecords: true
+      streamHash: 71a2cb83572c9150ffbc5972db67577363fd1a73
+      hasResponse: true
+      primaryKeysAreUnique: true
+      primaryKeysArePresent: true
+      responsesAreSuccessful: true
+    ci_visibility_pipelines:
+      hasRecords: true
+      streamHash: 52d6e11574bf01a9891eec41f064d359a34f0d66
       hasResponse: true
       primaryKeysAreUnique: true
       primaryKeysArePresent: true
@@ -880,100 +1073,95 @@ schemas:
           - "null"
   incident_teams:
     type: object
-    $schema: http://json-schema.org/draft-07/schema#
+    $schema: http://json-schema.org/schema#
     additionalProperties: true
     properties:
       type:
         type:
           - string
           - "null"
-        description: "Incident Team resource type. Allowed enum values: teams"
-        enum:
-          - teams
-        readOnly: true
       attributes:
         type:
           - object
           - "null"
-        description: The incident team's attributes from a response.
-        additionalProperties: true
         properties:
-          created:
+          description:
             type:
               - string
               - "null"
-            description: Timestamp of when the incident team was created.
-            format: date-time
-          modified:
+          created_at:
             type:
               - string
               - "null"
-            description: Timestamp of when the incident team was modified.
-            format: date-time
+          handle:
+            type:
+              - string
+              - "null"
+          is_managed:
+            type:
+              - boolean
+              - "null"
+          link_count:
+            type:
+              - number
+              - "null"
+          modified_at:
+            type:
+              - string
+              - "null"
           name:
             type:
               - string
               - "null"
-            description: Name of the incident team.
+          summary:
+            type:
+              - string
+              - "null"
+          user_count:
+            type:
+              - number
+              - "null"
       id:
-        type:
-          - string
-          - "null"
-        description: The incident team's ID.
-        readOnly: true
+        type: string
       relationships:
         type:
           - object
           - "null"
-        description: The incident team's relationships.
-        additionalProperties: true
         properties:
-          created_by:
+          team_links:
             type:
               - object
               - "null"
-            description: Relationship to user.
-            additionalProperties: true
             properties:
               data:
                 type:
+                  - array
+                  - "null"
+              links:
+                type:
                   - object
-                description: Relationship to user object.
-                additionalProperties: true
+                  - "null"
                 properties:
-                  type:
+                  related:
                     type:
                       - string
-                    description: "Users resource type. Allowed enum values: users"
-                    enum:
-                      - users
-                  id:
-                    type:
-                      - string
-                    description: A unique identifier that represents the user.
-          last_modified_by:
+                      - "null"
+          user_team_permissions:
             type:
               - object
               - "null"
-            description: Relationship to user.
-            additionalProperties: true
             properties:
-              data:
+              links:
                 type:
                   - object
-                description: Relationship to user object.
-                additionalProperties: true
+                  - "null"
                 properties:
-                  type:
+                  related:
                     type:
                       - string
-                    description: "Users resource type. Allowed enum values: users"
-                    enum:
-                      - users
-                  id:
-                    type:
-                      - string
-                    description: A unique identifier that represents the user.
+                      - "null"
+    required:
+      - id
   incidents:
     type: object
     $schema: http://json-schema.org/draft-07/schema#
@@ -2061,3 +2249,1743 @@ schemas:
           - "null"
         description: Relationships of the user object returned by the API.
         readOnly: true
+  ci_visibility_tests:
+    type: object
+    $schema: http://json-schema.org/schema#
+    additionalProperties: true
+    properties:
+      type:
+        type:
+          - string
+          - "null"
+      attributes:
+        type:
+          - object
+          - "null"
+        properties:
+          attributes:
+            type:
+              - object
+              - "null"
+            properties:
+              _dd_single_span:
+                type:
+                  - string
+                  - "null"
+              ci:
+                type:
+                  - object
+                  - "null"
+                properties:
+                  job:
+                    type:
+                      - object
+                      - "null"
+                    properties:
+                      name:
+                        type:
+                          - string
+                          - "null"
+                      url:
+                        type:
+                          - string
+                          - "null"
+                  node:
+                    type:
+                      - object
+                      - "null"
+                    properties:
+                      labels:
+                        type:
+                          - array
+                          - "null"
+                      name:
+                        type:
+                          - string
+                          - "null"
+                  pipeline:
+                    type:
+                      - object
+                      - "null"
+                    properties:
+                      id:
+                        type:
+                          - string
+                          - "null"
+                      name:
+                        type:
+                          - string
+                          - "null"
+                      number:
+                        type:
+                          - number
+                          - "null"
+                      url:
+                        type:
+                          - string
+                          - "null"
+                  provider:
+                    type:
+                      - object
+                      - "null"
+                    properties:
+                      name:
+                        type:
+                          - string
+                          - "null"
+                  stage:
+                    type:
+                      - object
+                      - "null"
+                    properties:
+                      name:
+                        type:
+                          - string
+                          - "null"
+                  workspace_path:
+                    type:
+                      - string
+                      - "null"
+              ddsource:
+                type:
+                  - string
+                  - "null"
+              duration:
+                type:
+                  - number
+                  - "null"
+              env:
+                type:
+                  - string
+                  - "null"
+              git:
+                type:
+                  - object
+                  - "null"
+                properties:
+                  branch:
+                    type:
+                      - string
+                      - "null"
+                  commit:
+                    type:
+                      - object
+                      - "null"
+                    properties:
+                      author:
+                        type:
+                          - object
+                          - "null"
+                        properties:
+                          date:
+                            type:
+                              - string
+                              - "null"
+                          date_timestamp:
+                            type:
+                              - number
+                              - "null"
+                          email:
+                            type:
+                              - string
+                              - "null"
+                          name:
+                            type:
+                              - string
+                              - "null"
+                      committer:
+                        type:
+                          - object
+                          - "null"
+                        properties:
+                          date:
+                            type:
+                              - string
+                              - "null"
+                          date_timestamp:
+                            type:
+                              - number
+                              - "null"
+                          email:
+                            type:
+                              - string
+                              - "null"
+                          name:
+                            type:
+                              - string
+                              - "null"
+                      message:
+                        type:
+                          - string
+                          - "null"
+                      sha:
+                        type:
+                          - string
+                          - "null"
+                  repository:
+                    type:
+                      - object
+                      - "null"
+                    properties:
+                      host:
+                        type:
+                          - string
+                          - "null"
+                      id:
+                        type:
+                          - string
+                          - "null"
+                      id_v2:
+                        type:
+                          - string
+                          - "null"
+                      name:
+                        type:
+                          - string
+                          - "null"
+                      path:
+                        type:
+                          - string
+                          - "null"
+                      scheme:
+                        type:
+                          - string
+                          - "null"
+                  repository_url:
+                    type:
+                      - string
+                      - "null"
+              mr_event_type:
+                type:
+                  - string
+                  - "null"
+              retained_by:
+                type:
+                  - string
+                  - "null"
+              service:
+                type:
+                  - string
+                  - "null"
+              start:
+                type:
+                  - number
+                  - "null"
+              test:
+                type:
+                  - object
+                  - "null"
+                properties:
+                  type:
+                    type:
+                      - string
+                      - "null"
+                  bundle:
+                    type:
+                      - string
+                      - "null"
+                  command:
+                    type:
+                      - string
+                      - "null"
+                  fingerprint:
+                    type:
+                      - string
+                      - "null"
+                  fingerprint_v2:
+                    type:
+                      - string
+                      - "null"
+                  full_name:
+                    type:
+                      - string
+                      - "null"
+                  has_parameters:
+                    type:
+                      - boolean
+                      - "null"
+                  module:
+                    type:
+                      - string
+                      - "null"
+                  name:
+                    type:
+                      - string
+                      - "null"
+                  service:
+                    type:
+                      - string
+                      - "null"
+                  skip_reason:
+                    type:
+                      - string
+                      - "null"
+                  status:
+                    type:
+                      - string
+                      - "null"
+                  suite:
+                    type:
+                      - string
+                      - "null"
+              test_module:
+                type:
+                  - object
+                  - "null"
+                properties:
+                  fingerprint:
+                    type:
+                      - string
+                      - "null"
+                  fingerprint_v2:
+                    type:
+                      - string
+                      - "null"
+              test_session:
+                type:
+                  - object
+                  - "null"
+                properties:
+                  fingerprint:
+                    type:
+                      - string
+                      - "null"
+                  fingerprint_v2:
+                    type:
+                      - string
+                      - "null"
+                  name:
+                    type:
+                      - string
+                      - "null"
+              test_suite:
+                type:
+                  - object
+                  - "null"
+                properties:
+                  fingerprint:
+                    type:
+                      - string
+                      - "null"
+                  fingerprint_v2:
+                    type:
+                      - string
+                      - "null"
+          test_level:
+            type:
+              - string
+              - "null"
+      id:
+        type: string
+      sync_date:
+        type: string
+    required:
+      - id
+      - sync_date
+  ci_visibility_pipelines:
+    type: object
+    $schema: http://json-schema.org/schema#
+    additionalProperties: true
+    properties:
+      type:
+        type:
+          - string
+          - "null"
+      attributes:
+        type:
+          - object
+          - "null"
+        properties:
+          attributes:
+            type:
+              - object
+              - "null"
+            properties:
+              _top_level:
+                type:
+                  - number
+                  - "null"
+              ci:
+                type:
+                  - object
+                  - "null"
+                properties:
+                  allowed_to_fail:
+                    type:
+                      - boolean
+                      - "null"
+                  critical_path:
+                    type:
+                      - object
+                      - "null"
+                    properties:
+                      exclusive_time:
+                        type:
+                          - number
+                          - "null"
+                  deployment:
+                    type:
+                      - object
+                      - "null"
+                    properties:
+                      action:
+                        type:
+                          - string
+                          - "null"
+                      name:
+                        type:
+                          - string
+                          - "null"
+                  execution_time:
+                    type:
+                      - number
+                      - "null"
+                  is_manual:
+                    type:
+                      - boolean
+                      - "null"
+                  job:
+                    type:
+                      - object
+                      - "null"
+                    properties:
+                      id:
+                        type:
+                          - string
+                          - "null"
+                      name:
+                        type:
+                          - string
+                          - "null"
+                      url:
+                        type:
+                          - string
+                          - "null"
+                  mobplt:
+                    type:
+                      - object
+                      - "null"
+                    properties:
+                      android_target_version:
+                        type:
+                          - string
+                          - "null"
+                      archivers:
+                        type:
+                          - string
+                          - "null"
+                      config_cache_complete_hit:
+                        type:
+                          - boolean
+                          - "null"
+                      config_cache_partial_hit:
+                        type:
+                          - boolean
+                          - "null"
+                      config_cache_reuse_enabled:
+                        type:
+                          - boolean
+                          - "null"
+                      ctr_img_name:
+                        type:
+                          - string
+                          - "null"
+                      ctr_img_tag:
+                        type:
+                          - string
+                          - "null"
+                      ec2_ami_id:
+                        type:
+                          - string
+                          - "null"
+                      ec2_az:
+                        type:
+                          - string
+                          - "null"
+                      ec2_instance_id:
+                        type:
+                          - string
+                          - "null"
+                      ec2_instance_type:
+                        type:
+                          - string
+                          - "null"
+                      ec2_pre_pulled_imgs:
+                        type:
+                          - string
+                          - "null"
+                      git_clone_type:
+                        type:
+                          - string
+                          - "null"
+                      git_existing_repo:
+                        type:
+                          - boolean
+                          - "null"
+                      jdk:
+                        type:
+                          - string
+                          - "null"
+                      s3_type:
+                        type:
+                          - string
+                          - "null"
+                      ssd_enabled:
+                        type:
+                          - boolean
+                          - "null"
+                  node:
+                    type:
+                      - object
+                      - "null"
+                    properties:
+                      labels:
+                        type:
+                          - array
+                          - "null"
+                        items:
+                          type:
+                            - string
+                            - "null"
+                      name:
+                        type:
+                          - string
+                          - "null"
+                  on_critical_path:
+                    type:
+                      - boolean
+                      - "null"
+                  param:
+                    type:
+                      - object
+                      - "null"
+                    properties:
+                      aar_jacoco_report_location:
+                        type:
+                          - string
+                          - "null"
+                      aar_pom_location:
+                        type:
+                          - string
+                          - "null"
+                      action:
+                        type:
+                          - string
+                          - "null"
+                      all:
+                        type:
+                          - string
+                          - "null"
+                      allow_p0_failures:
+                        type:
+                          - string
+                          - "null"
+                      android_build_image:
+                        type:
+                          - string
+                          - "null"
+                      api_spec_filepath:
+                        type:
+                          - string
+                          - "null"
+                      api_spec_generation_enabled:
+                        type:
+                          - string
+                          - "null"
+                      api_spec_publish_enabled:
+                        type:
+                          - string
+                          - "null"
+                      api_spec_remote_path:
+                        type:
+                          - string
+                          - "null"
+                      api_spec_validation_enabled:
+                        type:
+                          - string
+                          - "null"
+                      apk_path:
+                        type:
+                          - string
+                          - "null"
+                      app_to_build:
+                        type:
+                          - string
+                          - "null"
+                      appsec_container_image_name:
+                        type:
+                          - string
+                          - "null"
+                      appsec_precheck_skip_languages:
+                        type:
+                          - string
+                          - "null"
+                      artifact_uri_path:
+                        type:
+                          - string
+                          - "null"
+                      artifactory_host_url:
+                        type:
+                          - string
+                          - "null"
+                      base_dir:
+                        type:
+                          - string
+                          - "null"
+                      build_enabled:
+                        type:
+                          - string
+                          - "null"
+                      build_image_prefix:
+                        type:
+                          - string
+                          - "null"
+                      building_sitemap:
+                        type:
+                          - string
+                          - "null"
+                      cicd_tools_image:
+                        type:
+                          - string
+                          - "null"
+                      cluster_alias:
+                        type:
+                          - string
+                          - "null"
+                      code_coverage_enabled:
+                        type:
+                          - string
+                          - "null"
+                      contact_description:
+                        type:
+                          - string
+                          - "null"
+                      contact_url:
+                        type:
+                          - string
+                          - "null"
+                      container_image_name:
+                        type:
+                          - string
+                          - "null"
+                      container_image_tag:
+                        type:
+                          - string
+                          - "null"
+                      coverage_ignore_file:
+                        type:
+                          - string
+                          - "null"
+                      cypress_cache_folder:
+                        type:
+                          - string
+                          - "null"
+                      danger_gitlab_api_base_url:
+                        type:
+                          - string
+                          - "null"
+                      danger_gitlab_host:
+                        type:
+                          - string
+                          - "null"
+                      datadog_apm_enabled:
+                        type:
+                          - string
+                          - "null"
+                      datadog_app_key:
+                        type:
+                          - string
+                          - "null"
+                      datadog_app_url:
+                        type:
+                          - string
+                          - "null"
+                      datadog_enabled:
+                        type:
+                          - string
+                          - "null"
+                      datadog_ignore_no_data:
+                        type:
+                          - string
+                          - "null"
+                      datadog_validation_enabled:
+                        type:
+                          - string
+                          - "null"
+                      dd_app_key:
+                        type:
+                          - string
+                          - "null"
+                      debian_10_only_image:
+                        type:
+                          - string
+                          - "null"
+                      debian_version:
+                        type:
+                          - string
+                          - "null"
+                      default_build_image:
+                        type:
+                          - string
+                          - "null"
+                      default_image:
+                        type:
+                          - string
+                          - "null"
+                      default_test_annotations:
+                        type:
+                          - string
+                          - "null"
+                      delete_after:
+                        type:
+                          - string
+                          - "null"
+                      deploy_aianalytics_dev:
+                        type:
+                          - string
+                          - "null"
+                      deploy_aianalytics_prod:
+                        type:
+                          - string
+                          - "null"
+                      deploy_aianalytics_sandbox:
+                        type:
+                          - string
+                          - "null"
+                      deploy_aianalytics_stage:
+                        type:
+                          - string
+                          - "null"
+                      deploy_connsplatform_dev:
+                        type:
+                          - string
+                          - "null"
+                      deploy_connsplatform_prod:
+                        type:
+                          - string
+                          - "null"
+                      deploy_connsplatform_stage:
+                        type:
+                          - string
+                          - "null"
+                      deploy_consumer_dev:
+                        type:
+                          - string
+                          - "null"
+                      deploy_consumer_prod:
+                        type:
+                          - string
+                          - "null"
+                      deploy_consumer_stage:
+                        type:
+                          - string
+                          - "null"
+                      deploy_consumer_use1_prod:
+                        type:
+                          - string
+                          - "null"
+                      deploy_dev:
+                        type:
+                          - string
+                          - "null"
+                      deploy_enterprise_dev:
+                        type:
+                          - string
+                          - "null"
+                      deploy_enterprise_prod:
+                        type:
+                          - string
+                          - "null"
+                      deploy_enterprise_stage:
+                        type:
+                          - string
+                          - "null"
+                      deploy_federated_dev:
+                        type:
+                          - string
+                          - "null"
+                      deploy_federated_prod:
+                        type:
+                          - string
+                          - "null"
+                      deploy_federated_stage:
+                        type:
+                          - string
+                          - "null"
+                      deploy_itrc_dev:
+                        type:
+                          - string
+                          - "null"
+                      deploy_itrc_prod:
+                        type:
+                          - string
+                          - "null"
+                      deploy_itrc_stage:
+                        type:
+                          - string
+                          - "null"
+                      deploy_k8s_playground:
+                        type:
+                          - string
+                          - "null"
+                      deploy_library:
+                        type:
+                          - string
+                          - "null"
+                      deploy_platforms:
+                        type:
+                          - string
+                          - "null"
+                      deploy_prod:
+                        type:
+                          - string
+                          - "null"
+                      deploy_review:
+                        type:
+                          - string
+                          - "null"
+                      deploy_sandbox:
+                        type:
+                          - string
+                          - "null"
+                      deploy_sandbox_2:
+                        type:
+                          - string
+                          - "null"
+                      deploy_sandbox_3:
+                        type:
+                          - string
+                          - "null"
+                      deploy_sandbox_4:
+                        type:
+                          - string
+                          - "null"
+                      deploy_sandbox_5:
+                        type:
+                          - string
+                          - "null"
+                      deploy_sandbox_6:
+                        type:
+                          - string
+                          - "null"
+                      deploy_stage:
+                        type:
+                          - string
+                          - "null"
+                      deploy_test:
+                        type:
+                          - string
+                          - "null"
+                      deploy_trulia_dev:
+                        type:
+                          - string
+                          - "null"
+                      deploy_trulia_preprod:
+                        type:
+                          - string
+                          - "null"
+                      deploy_trulia_prod:
+                        type:
+                          - string
+                          - "null"
+                      deploy_trulia_stage:
+                        type:
+                          - string
+                          - "null"
+                      deploy_zacs_nonprod:
+                        type:
+                          - string
+                          - "null"
+                      deploy_zacs_prod:
+                        type:
+                          - string
+                          - "null"
+                      deploy_zacs_stable:
+                        type:
+                          - string
+                          - "null"
+                      deploy_zgtools_dev:
+                        type:
+                          - string
+                          - "null"
+                      deploy_zgtools_prod:
+                        type:
+                          - string
+                          - "null"
+                      deploy_zgtools_test:
+                        type:
+                          - string
+                          - "null"
+                      dev_override_url:
+                        type:
+                          - string
+                          - "null"
+                      dev_version_override_base_url:
+                        type:
+                          - string
+                          - "null"
+                      dev_version_override_redirect_url:
+                        type:
+                          - string
+                          - "null"
+                      device_1:
+                        type:
+                          - string
+                          - "null"
+                      device_1_name:
+                        type:
+                          - string
+                          - "null"
+                      device_1_xml:
+                        type:
+                          - string
+                          - "null"
+                      device_2:
+                        type:
+                          - string
+                          - "null"
+                      device_2_name:
+                        type:
+                          - string
+                          - "null"
+                      device_2_xml:
+                        type:
+                          - string
+                          - "null"
+                      device_3:
+                        type:
+                          - string
+                          - "null"
+                      device_3_name:
+                        type:
+                          - string
+                          - "null"
+                      device_3_xml:
+                        type:
+                          - string
+                          - "null"
+                      docker_build_options:
+                        type:
+                          - string
+                          - "null"
+                      docker_repo_url:
+                        type:
+                          - string
+                          - "null"
+                      enable_hpa_override:
+                        type:
+                          - string
+                          - "null"
+                      enable_prod_schema_release:
+                        type:
+                          - string
+                          - "null"
+                      enable_stage_schema_release:
+                        type:
+                          - string
+                          - "null"
+                      environment:
+                        type:
+                          - string
+                          - "null"
+                      environment_suffix:
+                        type:
+                          - string
+                          - "null"
+                      fit_build_image:
+                        type:
+                          - string
+                          - "null"
+                      force_color:
+                        type:
+                          - string
+                          - "null"
+                      fqdn:
+                        type:
+                          - string
+                          - "null"
+                      git_submodule_strategy:
+                        type:
+                          - string
+                          - "null"
+                      global_gonosumdb:
+                        type:
+                          - string
+                          - "null"
+                      global_goproxy:
+                        type:
+                          - string
+                          - "null"
+                      golangci_version:
+                        type:
+                          - string
+                          - "null"
+                      gonosumdb:
+                        type:
+                          - string
+                          - "null"
+                      goproxy:
+                        type:
+                          - string
+                          - "null"
+                      gql_files_extension:
+                        type:
+                          - string
+                          - "null"
+                      gql_files_path:
+                        type:
+                          - string
+                          - "null"
+                      gradle_cc_cache_version_major:
+                        type:
+                          - string
+                          - "null"
+                      gradle_cc_cache_version_minor:
+                        type:
+                          - string
+                          - "null"
+                      gradle_opts:
+                        type:
+                          - string
+                          - "null"
+                      gradle_project_path:
+                        type:
+                          - string
+                          - "null"
+                      graphql_endpoint:
+                        type:
+                          - string
+                          - "null"
+                      gru_image:
+                        type:
+                          - string
+                          - "null"
+                      hotfix_regex:
+                        type:
+                          - string
+                          - "null"
+                      include_abinclude:
+                        type:
+                          - string
+                          - "null"
+                      include_contact_directive:
+                        type:
+                          - string
+                          - "null"
+                      infra_dir:
+                        type:
+                          - string
+                          - "null"
+                      infra_package_url:
+                        type:
+                          - string
+                          - "null"
+                      infra_version:
+                        type:
+                          - string
+                          - "null"
+                      instance:
+                        type:
+                          - string
+                          - "null"
+                      jacoco_html_report_path:
+                        type:
+                          - string
+                          - "null"
+                      jacoco_xml_report_path:
+                        type:
+                          - string
+                          - "null"
+                      java_docker_image:
+                        type:
+                          - string
+                          - "null"
+                      java_version:
+                        type:
+                          - string
+                          - "null"
+                      jira_issue_prefix:
+                        type:
+                          - string
+                          - "null"
+                      kustomize_overlay:
+                        type:
+                          - string
+                          - "null"
+                      lang:
+                        type:
+                          - string
+                          - "null"
+                      language:
+                        type:
+                          - string
+                          - "null"
+                      lb_type:
+                        type:
+                          - string
+                          - "null"
+                      lc_all:
+                        type:
+                          - string
+                          - "null"
+                      lerna_version:
+                        type:
+                          - string
+                          - "null"
+                      major_version:
+                        type:
+                          - string
+                          - "null"
+                      manual_deploy:
+                        type:
+                          - string
+                          - "null"
+                      manual_deploy_prod:
+                        type:
+                          - string
+                          - "null"
+                      min_coverage:
+                        type:
+                          - string
+                          - "null"
+                      minor_version:
+                        type:
+                          - string
+                          - "null"
+                      nextjs_screenshot_tests_image:
+                        type:
+                          - string
+                          - "null"
+                      node_14_build_image:
+                        type:
+                          - string
+                          - "null"
+                      node_16_build_image:
+                        type:
+                          - string
+                          - "null"
+                      node_18_build_image:
+                        type:
+                          - string
+                          - "null"
+                      node_20_build_image:
+                        type:
+                          - string
+                          - "null"
+                      node_version:
+                        type:
+                          - string
+                          - "null"
+                      npm_config_cache:
+                        type:
+                          - string
+                          - "null"
+                      package_path:
+                        type:
+                          - string
+                          - "null"
+                      panoptes_enabled:
+                        type:
+                          - string
+                          - "null"
+                      parent_pipeline_id:
+                        type:
+                          - string
+                          - "null"
+                      parent_pipeline_source:
+                        type:
+                          - string
+                          - "null"
+                      pipeline_name:
+                        type:
+                          - string
+                          - "null"
+                      pipeline_type:
+                        type:
+                          - string
+                          - "null"
+                      platform:
+                        type:
+                          - string
+                          - "null"
+                      poetry_version:
+                        type:
+                          - string
+                          - "null"
+                      profile_e2e_testing_tags:
+                        type:
+                          - string
+                          - "null"
+                      publish_enabled:
+                        type:
+                          - string
+                          - "null"
+                      python_version:
+                        type:
+                          - string
+                          - "null"
+                      real_estate:
+                        type:
+                          - string
+                          - "null"
+                      recent_update_xml_sitemap:
+                        type:
+                          - string
+                          - "null"
+                      release_date_format:
+                        type:
+                          - string
+                          - "null"
+                      release_prefix:
+                        type:
+                          - string
+                          - "null"
+                      release_secondary_slack_channels:
+                        type:
+                          - string
+                          - "null"
+                      release_slack_channel:
+                        type:
+                          - string
+                          - "null"
+                      release_start_heading:
+                        type:
+                          - string
+                          - "null"
+                      rentals:
+                        type:
+                          - string
+                          - "null"
+                      review_cluster_alias:
+                        type:
+                          - string
+                          - "null"
+                      review_kustomize_overlay:
+                        type:
+                          - string
+                          - "null"
+                      s3_bucket:
+                        type:
+                          - string
+                          - "null"
+                      sast_disabled:
+                        type:
+                          - string
+                          - "null"
+                      sast_excluded_analyzers:
+                        type:
+                          - string
+                          - "null"
+                      sast_excluded_paths:
+                        type:
+                          - string
+                          - "null"
+                      sast_image_suffix:
+                        type:
+                          - string
+                          - "null"
+                      sast_java_version:
+                        type:
+                          - string
+                          - "null"
+                      scan_kubernetes_manifests:
+                        type:
+                          - string
+                          - "null"
+                      secure_analyzers_prefix:
+                        type:
+                          - string
+                          - "null"
+                      skip_npm_autobuild:
+                        type:
+                          - string
+                          - "null"
+                      slo_service_name:
+                        type:
+                          - string
+                          - "null"
+                      slos_enabled:
+                        type:
+                          - string
+                          - "null"
+                      snyk_debug_mode:
+                        type:
+                          - string
+                          - "null"
+                      snyk_enabled:
+                        type:
+                          - string
+                          - "null"
+                      snyk_java_version:
+                        type:
+                          - string
+                          - "null"
+                      snyk_monitor:
+                        type:
+                          - string
+                          - "null"
+                      snyk_prune_repeated_subdeps:
+                        type:
+                          - string
+                          - "null"
+                      snyk_sev_fail:
+                        type:
+                          - string
+                          - "null"
+                      snyk_sev_min:
+                        type:
+                          - string
+                          - "null"
+                      sonar_host_url:
+                        type:
+                          - string
+                          - "null"
+                      sonar_project_key:
+                        type:
+                          - string
+                          - "null"
+                      spot_enabled:
+                        type:
+                          - string
+                          - "null"
+                      srp_url_update:
+                        type:
+                          - string
+                          - "null"
+                      srp_xml_sitemap:
+                        type:
+                          - string
+                          - "null"
+                      stage_version_override_base_url:
+                        type:
+                          - string
+                          - "null"
+                      stage_version_override_redirect_url:
+                        type:
+                          - string
+                          - "null"
+                      sub_app_name:
+                        type:
+                          - string
+                          - "null"
+                      subgraph_name:
+                        type:
+                          - string
+                          - "null"
+                      subgraph_schema_file:
+                        type:
+                          - string
+                          - "null"
+                      subrepo_image:
+                        type:
+                          - string
+                          - "null"
+                      test_annotations:
+                        type:
+                          - string
+                          - "null"
+                      test_runner_ci:
+                        type:
+                          - string
+                          - "null"
+                      timestamp_file:
+                        type:
+                          - string
+                          - "null"
+                      topology_aware_traffic_routing_enabled:
+                        type:
+                          - string
+                          - "null"
+                      trunk_image:
+                        type:
+                          - string
+                          - "null"
+                      trunk_uploader_link:
+                        type:
+                          - string
+                          - "null"
+                      tz:
+                        type:
+                          - string
+                          - "null"
+                      unit_test_reports_enabled:
+                        type:
+                          - string
+                          - "null"
+                      use_debian_10:
+                        type:
+                          - string
+                          - "null"
+                      use_env_specific_config_vars:
+                        type:
+                          - string
+                          - "null"
+                      use_node_14:
+                        type:
+                          - string
+                          - "null"
+                      use_node_14_and_debian_10:
+                        type:
+                          - string
+                          - "null"
+                      use_node_16:
+                        type:
+                          - string
+                          - "null"
+                      use_node_20:
+                        type:
+                          - string
+                          - "null"
+                      version_string:
+                        type:
+                          - string
+                          - "null"
+                      virtual_device_1:
+                        type:
+                          - string
+                          - "null"
+                      virtual_device_1_name:
+                        type:
+                          - string
+                          - "null"
+                      virtual_device_1_xml:
+                        type:
+                          - string
+                          - "null"
+                      virtual_device_2:
+                        type:
+                          - string
+                          - "null"
+                      virtual_device_2_name:
+                        type:
+                          - string
+                          - "null"
+                      virtual_device_2_xml:
+                        type:
+                          - string
+                          - "null"
+                      virtual_device_3:
+                        type:
+                          - string
+                          - "null"
+                      virtual_device_3_name:
+                        type:
+                          - string
+                          - "null"
+                      virtual_device_3_xml:
+                        type:
+                          - string
+                          - "null"
+                      web_platform_cicd_image:
+                        type:
+                          - string
+                          - "null"
+                      web_platform_cli_version:
+                        type:
+                          - string
+                          - "null"
+                      web_platform_deploy_url:
+                        type:
+                          - string
+                          - "null"
+                      zodiac_service:
+                        type:
+                          - string
+                          - "null"
+                      zon_enabled:
+                        type:
+                          - string
+                          - "null"
+                      zopr_link_file:
+                        type:
+                          - string
+                          - "null"
+                  parameters:
+                    type:
+                      - array
+                      - "null"
+                    items:
+                      type:
+                        - string
+                        - "null"
+                  partial_pipeline:
+                    type:
+                      - array
+                      - "null"
+                    items:
+                      type:
+                        - string
+                        - "null"
+                  pipeline:
+                    type:
+                      - object
+                      - "null"
+                    properties:
+                      downstream:
+                        type:
+                          - boolean
+                          - "null"
+                      fingerprint:
+                        type:
+                          - string
+                          - "null"
+                      fingerprint_v2:
+                        type:
+                          - string
+                          - "null"
+                      id:
+                        type:
+                          - string
+                          - "null"
+                      name:
+                        type:
+                          - string
+                          - "null"
+                      upstream_pipeline_id:
+                        type:
+                          - string
+                          - "null"
+                      url:
+                        type:
+                          - string
+                          - "null"
+                  provider:
+                    type:
+                      - object
+                      - "null"
+                    properties:
+                      instance:
+                        type:
+                          - string
+                          - "null"
+                      name:
+                        type:
+                          - string
+                          - "null"
+                  queue_time:
+                    type:
+                      - number
+                      - "null"
+                  stage:
+                    type:
+                      - object
+                      - "null"
+                    properties:
+                      name:
+                        type:
+                          - string
+                          - "null"
+                  status:
+                    type:
+                      - string
+                      - "null"
+                  wait_time:
+                    type:
+                      - number
+                      - "null"
+              duration:
+                type:
+                  - number
+                  - "null"
+              error:
+                type:
+                  - object
+                  - "null"
+                properties:
+                  type:
+                    type:
+                      - string
+                      - "null"
+                  domain:
+                    type:
+                      - string
+                      - "null"
+                  message:
+                    type:
+                      - string
+                      - "null"
+              flaky_test_analytics:
+                type:
+                  - object
+                  - "null"
+                properties:
+                  success:
+                    type:
+                      - boolean
+                      - "null"
+              git:
+                type:
+                  - object
+                  - "null"
+                properties:
+                  branch:
+                    type:
+                      - string
+                      - "null"
+                  commit:
+                    type:
+                      - object
+                      - "null"
+                    properties:
+                      author:
+                        type:
+                          - object
+                          - "null"
+                        properties:
+                          email:
+                            type:
+                              - string
+                              - "null"
+                          name:
+                            type:
+                              - string
+                              - "null"
+                      committer:
+                        type:
+                          - object
+                          - "null"
+                        properties:
+                          date:
+                            type:
+                              - string
+                              - "null"
+                          date_timestamp:
+                            type:
+                              - number
+                              - "null"
+                      message:
+                        type:
+                          - string
+                          - "null"
+                      sha:
+                        type:
+                          - string
+                          - "null"
+                  default_branch:
+                    type:
+                      - string
+                      - "null"
+                  is_default_branch:
+                    type:
+                      - boolean
+                      - "null"
+                  repository:
+                    type:
+                      - object
+                      - "null"
+                    properties:
+                      host:
+                        type:
+                          - string
+                          - "null"
+                      id:
+                        type:
+                          - string
+                          - "null"
+                      id_v2:
+                        type:
+                          - string
+                          - "null"
+                      name:
+                        type:
+                          - string
+                          - "null"
+                      path:
+                        type:
+                          - string
+                          - "null"
+                      scheme:
+                        type:
+                          - string
+                          - "null"
+                  repository_url:
+                    type:
+                      - string
+                      - "null"
+              gitlab:
+                type:
+                  - object
+                  - "null"
+                properties:
+                  version:
+                    type:
+                      - string
+                      - "null"
+                  pipeline_source:
+                    type:
+                      - string
+                      - "null"
+                  result:
+                    type:
+                      - string
+                      - "null"
+                  runner:
+                    type:
+                      - object
+                      - "null"
+                    properties:
+                      shared:
+                        type:
+                          - boolean
+                          - "null"
+                  upstream:
+                    type:
+                      - object
+                      - "null"
+                    properties:
+                      bridge_job_id:
+                        type:
+                          - string
+                          - "null"
+                      pipeline_id:
+                        type:
+                          - string
+                          - "null"
+                      project:
+                        type:
+                          - string
+                          - "null"
+              mr_event_type:
+                type:
+                  - string
+                  - "null"
+              project:
+                type:
+                  - string
+                  - "null"
+              start:
+                type:
+                  - number
+                  - "null"
+              team:
+                type:
+                  - string
+                  - "null"
+              user:
+                type:
+                  - object
+                  - "null"
+                properties:
+                  name:
+                    type:
+                      - string
+                      - "null"
+          ci_level:
+            type:
+              - string
+              - "null"
+          tags:
+            type:
+              - array
+              - "null"
+            items:
+              type:
+                - string
+                - "null"
+      id:
+        type: string
+      sync_date:
+        type: string
+    required:
+      - id
+      - sync_date
